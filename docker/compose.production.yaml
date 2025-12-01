@@ -1,6 +1,121 @@
-# services:
-  # backend:
+version: '3.8'
 
-  # gateway:
+services:
+  # MongoDB service (production-grade, not exposed)
+  mongo:
+    image: mongo:latest
+    container_name: app-mongo-prod
+    networks:
+      - app-network
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE}
+    volumes:
+      - mongo-data-prod:/data/db
+      - mongo-config-prod:/data/configdb
+    # MongoDB NOT exposed on any port in production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    # Resource limits for production
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
 
-  # mongo:
+  # Backend service (production-grade, not exposed to external network)
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: app-backend-prod
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - app-network
+    environment:
+      NODE_ENV: production
+      BACKEND_PORT: ${BACKEND_PORT}
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
+      MONGO_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@mongo:27017/${MONGO_DATABASE}?authSource=admin
+      MONGO_DATABASE: ${MONGO_DATABASE}
+    # Backend NOT exposed on any port in production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3847/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    # Resource limits for production
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # Gateway service (only service exposed to external clients)
+  gateway:
+    build:
+      context: ../gateway
+      dockerfile: Dockerfile
+    container_name: app-gateway-prod
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - app-network
+    environment:
+      NODE_ENV: production
+      GATEWAY_PORT: ${GATEWAY_PORT}
+      BACKEND_URL: http://backend:${BACKEND_PORT}
+    ports:
+      - "5921:5921"  # Only external port exposed
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5921/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    # Resource limits for production
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+# Named volumes for data persistence (production)
+volumes:
+  mongo-data-prod:
+    driver: local
+  mongo-config-prod:
+    driver: local
+
+# Custom network (isolated, services communicate via internal network only)
+networks:
+  app-network:
+    driver: bridge

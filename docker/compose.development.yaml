@@ -1,6 +1,94 @@
-# services:
-  # backend:
+version: '3.8'
 
-  # gateway:
+services:
+  # MongoDB service (data persistence, not exposed)
+  mongo:
+    image: mongo:latest
+    container_name: app-mongo-dev
+    networks:
+      - app-network
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-devuser}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:-devpass}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE:-ecommerce}
+    volumes:
+      - mongo-data-dev:/data/db
+      - mongo-config-dev:/data/configdb
+    ports:
+      - "27017:27017"  # Exposed for development convenience, not recommended for production
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
-  # mongo:
+  # Backend service (not exposed to external network)
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.dev
+    container_name: app-backend-dev
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - app-network
+    environment:
+      NODE_ENV: development
+      BACKEND_PORT: ${BACKEND_PORT:-3847}
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-devuser}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:-devpass}
+      MONGO_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:-devuser}:${MONGO_INITDB_ROOT_PASSWORD:-devpass}@mongo:27017/${MONGO_DATABASE:-ecommerce}?authSource=admin
+      MONGO_DATABASE: ${MONGO_DATABASE:-ecommerce}
+    volumes:
+      - ../backend/src:/app/src  # Hot-reload source code
+      - ../backend/tsconfig.json:/app/tsconfig.json
+      - /app/node_modules  # Prevent host node_modules from overriding container
+    ports:
+      - "3847:3847"  # Internal port, not exposed via gateway yet
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3847/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Gateway service (only service exposed to external clients)
+  gateway:
+    build:
+      context: ../gateway
+      dockerfile: Dockerfile.dev
+    container_name: app-gateway-dev
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - app-network
+    environment:
+      NODE_ENV: development
+      GATEWAY_PORT: ${GATEWAY_PORT:-5921}
+      BACKEND_URL: http://backend:${BACKEND_PORT:-3847}
+    volumes:
+      - ../gateway/src:/app/src  # Hot-reload source code
+      - /app/node_modules  # Prevent host node_modules from overriding container
+    ports:
+      - "5921:5921"  # Only external port exposed
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5921/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+# Named volumes for data persistence
+volumes:
+  mongo-data-dev:
+    driver: local
+  mongo-config-dev:
+    driver: local
+
+# Custom network (not exposed to host, services communicate via internal network)
+networks:
+  app-network:
+    driver: bridge

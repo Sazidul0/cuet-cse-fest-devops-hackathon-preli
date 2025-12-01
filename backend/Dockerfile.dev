@@ -1,0 +1,23 @@
+# Development Dockerfile with hot-reload support
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json tsconfig.json ./
+
+# Install all dependencies (including devDependencies)
+RUN npm install
+
+# Copy source code (will be mounted as volume for hot-reload)
+COPY src ./src
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3847/api/health || exit 1
+
+# Expose port
+EXPOSE 3847
+
+# Run in dev mode with hot-reload
+CMD ["npm", "run", "dev"]
